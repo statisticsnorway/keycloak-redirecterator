@@ -1,0 +1,4 @@
+## Append samples of your project ##
+resources:
+- dapla_v1alpha1_commonclientredirecturi.yaml
+#+kubebuilder:scaffold:manifestskustomizesamples
