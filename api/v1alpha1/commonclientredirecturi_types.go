@@ -31,6 +31,9 @@ type CommonClientRedirectUriSpec struct {
 
 	// The client id of the common Keycloak client
 	ClientId string `json:"clientId"`
+
+	// The name of the secret to generate, if wanted
+	SecretName string `json:"secretName,omitempty"`
 }
 
 // CommonClientRedirectUriStatus defines the observed state of CommonClientRedirectUri
@@ -40,6 +43,9 @@ type CommonClientRedirectUriStatus struct {
 
 	// The client id of the common Keycloak client
 	ClientId string `json:"clientId,omitempty"`
+
+	// The name of the generated secret, if it exists
+	SecretName string `json:"secretName,omitempty"`
 }
 
 //+kubebuilder:object:root=true

@@ -42,6 +42,9 @@ spec:
               redirectUri:
                 description: The redirect uri to add to the common Keycloak client
                 type: string
+              secretName:
+                description: The name of the secret to generate, if wanted
+                type: string
             required:
             - clientId
             - redirectUri
@@ -56,6 +59,9 @@ spec:
               redirectUri:
                 description: Current redirect uri in the common Keycloak client. If
                   not set, the redirect uri is not in the client's redirect uris
+                type: string
+              secretName:
+                description: The name of the generated secret, if it exists
                 type: string
             type: object
         type: object

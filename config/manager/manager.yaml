@@ -9,6 +9,7 @@ metadata:
     app.kubernetes.io/created-by: dapla-operator
     app.kubernetes.io/part-of: dapla-operator
     app.kubernetes.io/managed-by: kustomize
+    istio-injection: enabled
   name: system
 ---
 apiVersion: apps/v1

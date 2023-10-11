@@ -18,6 +18,8 @@ package controller
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/base64"
 	"fmt"
 	"time"
 
@@ -125,7 +127,7 @@ func (r *CommonClientRedirectUriReconciler) Reconcile(ctx context.Context, req c
 
 	// Check if the resource is marked to be deleted
 	if instance.GetDeletionTimestamp().IsZero() {
-		// If resurce does not have finalizer, add it
+		// If resource does not have finalizer, add it
 		if !controllerutil.ContainsFinalizer(instance, finalizerName) {
 			controllerutil.AddFinalizer(instance, finalizerName)
 			if err := r.Update(ctx, instance); err != nil {
@@ -165,6 +167,29 @@ func (r *CommonClientRedirectUriReconciler) Reconcile(ctx context.Context, req c
 		}
 	}
 
+	// If the secret name has changed, delete the old secret
+	if instance.Status.SecretName != instance.Spec.SecretName && instance.Status.SecretName != "" {
+		secret := &corev1.Secret{}
+		err := r.Get(ctx, types.NamespacedName{Name: instance.Status.SecretName, Namespace: instance.Namespace}, secret)
+		if err != nil && errors.IsNotFound(err) {
+			// If the secret does not exist, it has already been deleted
+			instance.Status.SecretName = ""
+			if err := r.Status().Update(ctx, instance); err != nil {
+				return ctrl.Result{}, err
+			}
+		} else if err == nil {
+			if err := r.Delete(ctx, secret); err != nil {
+				return ctrl.Result{}, err
+			}
+			instance.Status.SecretName = ""
+			if err := r.Status().Update(ctx, instance); err != nil {
+				return ctrl.Result{}, err
+			}
+		} else {
+			return ctrl.Result{}, err
+		}
+	}
+
 	// Get the Keycloak client
 	kcClient, err := r.Keycloak.getClientFromId(ctx, instance.Spec.ClientId)
 	if err != nil {
@@ -191,36 +216,48 @@ func (r *CommonClientRedirectUriReconciler) Reconcile(ctx context.Context, req c
 		return ctrl.Result{}, err
 	}
 
-	// Create the oauth2-proxy secret
-	secret := &corev1.Secret{
-		ObjectMeta: ctrl.ObjectMeta{
-			Name:        fmt.Sprintf("%s-%s", instance.Name, "oauth2-proxy"),
-			Namespace:   instance.Namespace,
-			Labels:      make(map[string]string),
-			Annotations: make(map[string]string),
-		},
-		StringData: map[string]string{
-			"client-id":     instance.Spec.ClientId,
-			"client-secret": *kcClient.Secret,
-		},
-	}
-	if err := ctrl.SetControllerReference(instance, secret, r.Scheme); err != nil {
-		return ctrl.Result{}, err
-	}
+	// If secretName is set, create the oauth2-proxy secret
+	if instance.Spec.SecretName != instance.Status.SecretName && instance.Spec.SecretName != "" {
+		cookieSecret, err := generateCookieSecret()
+		if err != nil {
+			return ctrl.Result{}, err
+		}
+		secret := &corev1.Secret{
+			ObjectMeta: ctrl.ObjectMeta{
+				Name:        instance.Spec.SecretName,
+				Namespace:   instance.Namespace,
+				Labels:      make(map[string]string),
+				Annotations: make(map[string]string),
+			},
+			StringData: map[string]string{
+				"client-id":     instance.Spec.ClientId,
+				"client-secret": *kcClient.Secret,
+				"cookie-secret": cookieSecret,
+			},
+		}
+		if err := ctrl.SetControllerReference(instance, secret, r.Scheme); err != nil {
+			return ctrl.Result{}, err
+		}
 
-	foundSecret := &corev1.Secret{}
-	err = r.Get(ctx, types.NamespacedName{Name: secret.Name, Namespace: secret.Namespace}, foundSecret)
-	if err != nil && errors.IsNotFound(err) {
-		if err := r.Create(ctx, secret); err != nil {
+		foundSecret := &corev1.Secret{}
+		err = r.Get(ctx, types.NamespacedName{Name: secret.Name, Namespace: secret.Namespace}, foundSecret)
+		if err != nil && errors.IsNotFound(err) {
+			if err := r.Create(ctx, secret); err != nil {
+				return ctrl.Result{}, err
+			}
+			// Update status
+			instance.Status.SecretName = instance.Spec.SecretName
+			if err := r.Status().Update(ctx, instance); err != nil {
+				return ctrl.Result{}, err
+			}
+		} else if err == nil {
+			foundSecret.StringData = secret.StringData
+			if err := r.Update(ctx, foundSecret); err != nil {
+				return ctrl.Result{}, err
+			}
+		} else {
 			return ctrl.Result{}, err
 		}
-	} else if err == nil {
-		foundSecret.StringData = secret.StringData
-		if err := r.Update(ctx, foundSecret); err != nil {
-			return ctrl.Result{}, err
-		}
-	} else {
-		return ctrl.Result{}, err
 	}
 
 	return ctrl.Result{}, nil
@@ -269,4 +306,13 @@ func (r *CommonClientRedirectUriReconciler) cleanUpExternalResources(ctx context
 	}
 
 	return nil
+}
+
+func generateCookieSecret() (string, error) {
+	b := make([]byte, 32)
+	_, err := rand.Read(b)
+	if err != nil {
+		return "", err
+	}
+	return base64.URLEncoding.EncodeToString(b), nil
 }
