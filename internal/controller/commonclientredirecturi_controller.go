@@ -26,6 +26,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/utils/strings/slices"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
@@ -135,9 +136,14 @@ func (r *CommonClientRedirectUriReconciler) Reconcile(ctx context.Context, req c
 			}
 		}
 	} else {
-		// Clean up exernal resources and remove finalizer
+		// Update Keycloak client with new redirectUris, remove this resources' redirectUri
 		if controllerutil.ContainsFinalizer(instance, finalizerName) {
-			if err := r.cleanUpExternalResources(ctx, instance); err != nil {
+			// Get clientId from status as it is no longer in spec
+			redirectUris, err := r.getAllClientRedirectUrisFromSpecs(ctx, instance.Status.ClientId)
+			if err != nil {
+				return ctrl.Result{}, err
+			}
+			if err := r.updateKeycloakClientRedirectUris(ctx, instance.Status.ClientId, redirectUris); err != nil {
 				return ctrl.Result{}, err
 			}
 			controllerutil.RemoveFinalizer(instance, finalizerName)
@@ -149,22 +155,36 @@ func (r *CommonClientRedirectUriReconciler) Reconcile(ctx context.Context, req c
 		return ctrl.Result{}, nil
 	}
 
-	// If the client id or redirect uri has changed, remove the redirect uri from the status client
-	if instance.Status.ClientId != instance.Spec.ClientId || instance.Status.RedirectUri != instance.Spec.RedirectUri {
-		if err := r.cleanUpExternalResources(ctx, instance); err != nil {
+	if instance.Spec.ClientId != instance.Status.ClientId {
+		// Update Keycloak client with new redirectUris, remove this resources' redirectUri
+		redirectUris, err := r.getAllClientRedirectUrisFromSpecs(ctx, instance.Status.ClientId)
+		if err != nil {
 			return ctrl.Result{}, err
 		}
-
-		// Get instance again to get the latest version
-		if err := r.Get(ctx, req.NamespacedName, instance); err != nil {
-			return ctrl.Result{}, client.IgnoreNotFound(err)
-		}
-
-		// Update the status
-		instance.Status = daplav1alpha1.CommonClientRedirectUriStatus{}
-		if err := r.Status().Update(ctx, instance); err != nil {
+		if err := r.updateKeycloakClientRedirectUris(ctx, instance.Status.ClientId, redirectUris); err != nil {
 			return ctrl.Result{}, err
 		}
+	}
+
+	// Update Keycloak client with new redirectUris, add this resources' redirectUri
+	redirectUris, err := r.getAllClientRedirectUrisFromSpecs(ctx, instance.Spec.ClientId)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	if err := r.updateKeycloakClientRedirectUris(ctx, instance.Spec.ClientId, redirectUris); err != nil {
+		return ctrl.Result{}, err
+	}
+
+	// Get latest version of instance
+	if err := r.Get(ctx, req.NamespacedName, instance); err != nil {
+		return ctrl.Result{}, client.IgnoreNotFound(err)
+	}
+
+	// Update the status
+	instance.Status.ClientId = instance.Spec.ClientId
+	instance.Status.RedirectUri = instance.Spec.RedirectUri
+	if err := r.Status().Update(ctx, instance); err != nil {
+		return ctrl.Result{}, err
 	}
 
 	// If the secret name has changed, delete the old secret
@@ -190,34 +210,13 @@ func (r *CommonClientRedirectUriReconciler) Reconcile(ctx context.Context, req c
 		}
 	}
 
-	// Get the Keycloak client
-	kcClient, err := r.Keycloak.getClientFromId(ctx, instance.Spec.ClientId)
-	if err != nil {
-		return ctrl.Result{}, err
-	}
-
-	// Add the redirect uri to the client
-	*kcClient.RedirectURIs = append(*kcClient.RedirectURIs, instance.Spec.RedirectUri)
-
-	// Update the client
-	if err := r.Keycloak.UpdateClient(ctx, r.Keycloak.Token.AccessToken, r.Keycloak.Realm, *kcClient); err != nil {
-		return ctrl.Result{}, err
-	}
-
-	// Get latest version of instance
-	if err := r.Get(ctx, req.NamespacedName, instance); err != nil {
-		return ctrl.Result{}, client.IgnoreNotFound(err)
-	}
-
-	// Update the status
-	instance.Status.ClientId = instance.Spec.ClientId
-	instance.Status.RedirectUri = instance.Spec.RedirectUri
-	if err := r.Status().Update(ctx, instance); err != nil {
-		return ctrl.Result{}, err
-	}
-
 	// If secretName is set, create the oauth2-proxy secret
-	if instance.Spec.SecretName != instance.Status.SecretName && instance.Spec.SecretName != "" {
+	if instance.Spec.SecretName != "" {
+		// Get Keycloak client
+		kcClient, err := r.Keycloak.getClientFromId(ctx, instance.Spec.ClientId)
+		if err != nil {
+			return ctrl.Result{}, err
+		}
 		cookieSecret, err := generateCookieSecret()
 		if err != nil {
 			return ctrl.Result{}, err
@@ -251,9 +250,11 @@ func (r *CommonClientRedirectUriReconciler) Reconcile(ctx context.Context, req c
 				return ctrl.Result{}, err
 			}
 		} else if err == nil {
-			foundSecret.StringData = secret.StringData
-			if err := r.Update(ctx, foundSecret); err != nil {
-				return ctrl.Result{}, err
+			if foundSecret.StringData["client-id"] != secret.StringData["client-id"] {
+				foundSecret.StringData = secret.StringData
+				if err := r.Update(ctx, foundSecret); err != nil {
+					return ctrl.Result{}, err
+				}
 			}
 		} else {
 			return ctrl.Result{}, err
@@ -265,6 +266,15 @@ func (r *CommonClientRedirectUriReconciler) Reconcile(ctx context.Context, req c
 
 // SetupWithManager sets up the controller with the Manager.
 func (r *CommonClientRedirectUriReconciler) SetupWithManager(mgr ctrl.Manager) error {
+
+	// Index the clientId field for faster lookup
+	if err := mgr.GetFieldIndexer().IndexField(context.Background(), &daplav1alpha1.CommonClientRedirectUri{}, "spec.clientId", func(rawObj client.Object) []string {
+		instance := rawObj.(*daplav1alpha1.CommonClientRedirectUri)
+		return []string{instance.Spec.ClientId}
+	}); err != nil {
+		return err
+	}
+
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&daplav1alpha1.CommonClientRedirectUri{}).
 		Owns(&corev1.Secret{}).
@@ -315,4 +325,41 @@ func generateCookieSecret() (string, error) {
 		return "", err
 	}
 	return base64.URLEncoding.EncodeToString(b), nil
+}
+
+func (r *CommonClientRedirectUriReconciler) getAllClientRedirectUrisFromSpecs(ctx context.Context, clientId string) ([]string, error) {
+	instances := &daplav1alpha1.CommonClientRedirectUriList{}
+	if err := r.List(ctx, instances, client.MatchingFields{"spec.clientId": clientId}); err != nil {
+		return nil, err
+	}
+
+	redirectUris := make([]string, 0)
+	for _, instance := range instances.Items {
+		if !slices.Contains(redirectUris, instance.Spec.RedirectUri) {
+			redirectUris = append(redirectUris, instance.Spec.RedirectUri)
+		}
+	}
+
+	return redirectUris, nil
+}
+
+func (r *CommonClientRedirectUriReconciler) updateKeycloakClientRedirectUris(ctx context.Context, clientId string, redirectUris []string) error {
+	// Ensure we are authenticated with Keycloak
+	if err := r.Keycloak.ensureToken(ctx); err != nil {
+		return err
+	}
+
+	// Get the client
+	client, err := r.Keycloak.getClientFromId(ctx, clientId)
+	if err != nil {
+		return err
+	}
+
+	// Update the client
+	client.RedirectURIs = &redirectUris
+	if err := r.Keycloak.UpdateClient(ctx, r.Keycloak.Token.AccessToken, r.Keycloak.Realm, *client); err != nil {
+		return err
+	}
+
+	return nil
 }
