@@ -34,8 +34,8 @@ import (
 
 	"github.com/Nerzal/gocloak/v13"
 
-	daplav1alpha1 "github.com/statisticsnorway/dapla-operator/api/v1alpha1"
-	"github.com/statisticsnorway/dapla-operator/internal/controller"
+	daplav1alpha1 "github.com/statisticsnorway/keycloak-redirecterator/api/v1alpha1"
+	"github.com/statisticsnorway/keycloak-redirecterator/internal/controller"
 	//+kubebuilder:scaffold:imports
 )
 

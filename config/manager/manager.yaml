@@ -6,11 +6,20 @@ metadata:
     app.kubernetes.io/name: namespace
     app.kubernetes.io/instance: system
     app.kubernetes.io/component: manager
-    app.kubernetes.io/created-by: dapla-operator
-    app.kubernetes.io/part-of: dapla-operator
+    app.kubernetes.io/created-by: keycloak-redirecterator
+    app.kubernetes.io/part-of: keycloak-redirecterator
     app.kubernetes.io/managed-by: kustomize
     istio-injection: enabled
   name: system
+---
+apiVersion: security.istio.io/v1beta1
+kind: PeerAuthentication
+metadata:
+  name: keycloak-redirecterator-authentication
+  namespace: keycloak-redirecterator-system
+spec:
+  mtls:
+    mode: PERMISSIVE
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -22,8 +31,8 @@ metadata:
     app.kubernetes.io/name: deployment
     app.kubernetes.io/instance: controller-manager
     app.kubernetes.io/component: manager
-    app.kubernetes.io/created-by: dapla-operator
-    app.kubernetes.io/part-of: dapla-operator
+    app.kubernetes.io/created-by: keycloak-redirecterator
+    app.kubernetes.io/part-of: keycloak-redirecterator
     app.kubernetes.io/managed-by: kustomize
 spec:
   selector:
