@@ -32,7 +32,7 @@ import (
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 
-	daplav1alpha1 "github.com/statisticsnorway/dapla-operator/api/v1alpha1"
+	daplav1alpha1 "github.com/statisticsnorway/keycloak-redirecterator/api/v1alpha1"
 	//+kubebuilder:scaffold:imports
 )
 

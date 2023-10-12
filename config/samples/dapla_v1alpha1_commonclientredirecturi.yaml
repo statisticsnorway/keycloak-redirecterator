@@ -4,9 +4,9 @@ metadata:
   labels:
     app.kubernetes.io/name: commonclientredirecturi
     app.kubernetes.io/instance: commonclientredirecturi-sample
-    app.kubernetes.io/part-of: dapla-operator
+    app.kubernetes.io/part-of: keycloak-redirecterator
     app.kubernetes.io/managed-by: kustomize
-    app.kubernetes.io/created-by: dapla-operator
+    app.kubernetes.io/created-by: keycloak-redirecterator
   name: commonclientredirecturi-sample
 spec:
   # TODO(user): Add fields here

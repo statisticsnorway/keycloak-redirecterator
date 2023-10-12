@@ -1,4 +1,4 @@
-module github.com/statisticsnorway/dapla-operator
+module github.com/statisticsnorway/keycloak-redirecterator
 
 go 1.20
 

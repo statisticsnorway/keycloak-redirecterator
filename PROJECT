@@ -5,8 +5,8 @@
 domain: ssb.no
 layout:
 - go.kubebuilder.io/v4
-projectName: dapla-operator
-repo: github.com/statisticsnorway/dapla-operator
+projectName: keycloak-redirecterator
+repo: github.com/statisticsnorway/keycloak-redirecterator
 resources:
 - api:
     crdVersion: v1
@@ -15,7 +15,7 @@ resources:
   domain: ssb.no
   group: dapla
   kind: CommonClientRedirectUri
-  path: github.com/statisticsnorway/dapla-operator/api/v1alpha1
+  path: github.com/statisticsnorway/keycloak-redirecterator/api/v1alpha1
   version: v1alpha1
   webhooks:
     validation: true

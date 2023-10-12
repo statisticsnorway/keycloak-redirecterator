@@ -6,8 +6,8 @@ metadata:
     app.kubernetes.io/name: service
     app.kubernetes.io/instance: webhook-service
     app.kubernetes.io/component: webhook
-    app.kubernetes.io/created-by: dapla-operator
-    app.kubernetes.io/part-of: dapla-operator
+    app.kubernetes.io/created-by: keycloak-redirecterator
+    app.kubernetes.io/part-of: keycloak-redirecterator
     app.kubernetes.io/managed-by: kustomize
   name: webhook-service
   namespace: system
