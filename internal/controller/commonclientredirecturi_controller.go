@@ -281,43 +281,6 @@ func (r *CommonClientRedirectUriReconciler) SetupWithManager(mgr ctrl.Manager) e
 		Complete(r)
 }
 
-func (r *CommonClientRedirectUriReconciler) cleanUpExternalResources(ctx context.Context, instance *daplav1alpha1.CommonClientRedirectUri) error {
-
-	clientId := instance.Status.ClientId
-	redirectUri := instance.Status.RedirectUri
-
-	// If this is the case, chances are that the resource has been deleted already
-	if clientId == "" || redirectUri == "" {
-		return nil
-	}
-
-	// Ensure we are authenticated with Keycloak
-	if err := r.Keycloak.ensureToken(ctx); err != nil {
-		return err
-	}
-
-	// Get the client
-	client, err := r.Keycloak.getClientFromId(ctx, clientId)
-	if err != nil {
-		return err
-	}
-
-	// Remove the redirect uri from the client
-	for i, uri := range *client.RedirectURIs {
-		if uri == redirectUri {
-			*client.RedirectURIs = append((*client.RedirectURIs)[:i], (*client.RedirectURIs)[i+1:]...)
-			break
-		}
-	}
-
-	// Update the client
-	if err := r.Keycloak.UpdateClient(ctx, r.Keycloak.Token.AccessToken, r.Keycloak.Realm, *client); err != nil {
-		return err
-	}
-
-	return nil
-}
-
 func generateCookieSecret() (string, error) {
 	b := make([]byte, 32)
 	_, err := rand.Read(b)
