@@ -121,7 +121,7 @@ func main() {
 	if err = (&controller.CommonClientRedirectUriReconciler{
 		Client: mgr.GetClient(),
 		Scheme: mgr.GetScheme(),
-		Keycloak: &controller.GocloakWrapper{
+		Keycloak: &controller.DefaultGocloakWrapper{
 			GoCloak:      *gocloak.NewClient(keycloakHost),
 			ClientId:     keycloakClientId,
 			ClientSecret: keycloakClientSecret,
