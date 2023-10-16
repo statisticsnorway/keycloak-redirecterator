@@ -21,9 +21,9 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"fmt"
-	"time"
 
 	"k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/utils/strings/slices"
@@ -34,76 +34,14 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 
-	"github.com/Nerzal/gocloak/v13"
 	daplav1alpha1 "github.com/statisticsnorway/keycloak-redirecterator/api/v1alpha1"
 )
-
-type GocloakWrapper struct {
-	gocloak.GoCloak
-	Token        *gocloak.JWT
-	ClientId     string
-	ClientSecret string
-	Realm        string
-	TokenExpiry  int
-}
 
 // CommonClientRedirectUriReconciler reconciles a CommonClientRedirectUri object
 type CommonClientRedirectUriReconciler struct {
 	client.Client
 	Scheme   *runtime.Scheme
-	Keycloak *GocloakWrapper
-}
-
-func (k *GocloakWrapper) ensureToken(ctx context.Context) error {
-	if k.Token == nil {
-		token, err := k.LoginClient(ctx, k.ClientId, k.ClientSecret, k.Realm)
-		if err != nil {
-			return err
-		}
-		k.Token = token
-
-		retrospect, err := k.RetrospectToken(ctx, token.AccessToken, k.ClientId, k.ClientSecret, k.Realm)
-		if err != nil {
-			return err
-		}
-		if !*retrospect.Active {
-			return fmt.Errorf("token is not active")
-		}
-		k.TokenExpiry = *retrospect.Exp
-		return nil
-	}
-
-	// If token is about to expire, get a new one
-	if time.Now().UTC().Unix()+600 > int64(k.TokenExpiry) {
-		k.Token = nil
-		return k.ensureToken(ctx)
-	}
-
-	return nil
-}
-
-func (k *GocloakWrapper) getClientFromId(ctx context.Context, clientId string) (*gocloak.Client, error) {
-	// Ensure we are authenticated with Keycloak
-	if err := k.ensureToken(ctx); err != nil {
-		return nil, err
-	}
-
-	// Get all clients in realm matching filter (should only be one)
-	// Gocloak has no way of getting a single client by id (only by internal id)
-	clients, err := k.GetClients(ctx, k.Token.AccessToken, k.Realm, gocloak.GetClientsParams{
-		ClientID: &clientId,
-	})
-	if err != nil {
-		return nil, err
-	}
-
-	// Clients should only contain one client, which is the one we want
-	for _, client := range clients {
-		return client, nil
-	}
-
-	// If clients is empty, the client does not exist
-	return nil, fmt.Errorf("client with id %s not found", clientId)
+	Keycloak GocloakWrapper
 }
 
 var (
@@ -126,33 +64,9 @@ func (r *CommonClientRedirectUriReconciler) Reconcile(ctx context.Context, req c
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
-	// Check if the resource is marked to be deleted
-	if instance.GetDeletionTimestamp().IsZero() {
-		// If resource does not have finalizer, add it
-		if !controllerutil.ContainsFinalizer(instance, finalizerName) {
-			controllerutil.AddFinalizer(instance, finalizerName)
-			if err := r.Update(ctx, instance); err != nil {
-				return ctrl.Result{}, err
-			}
-		}
-	} else {
-		// Update Keycloak client with new redirectUris, remove this resources' redirectUri
-		if controllerutil.ContainsFinalizer(instance, finalizerName) {
-			// Get clientId from status as it is no longer in spec
-			redirectUris, err := r.getAllClientRedirectUrisFromSpecs(ctx, instance.Status.ClientId)
-			if err != nil {
-				return ctrl.Result{}, err
-			}
-			if err := r.updateKeycloakClientRedirectUris(ctx, instance.Status.ClientId, redirectUris); err != nil {
-				return ctrl.Result{}, err
-			}
-			controllerutil.RemoveFinalizer(instance, finalizerName)
-			if err := r.Update(ctx, instance); err != nil {
-				return ctrl.Result{}, err
-			}
-		}
-
-		return ctrl.Result{}, nil
+	// Check if instance is marked to be deleted, handle finalizer logic
+	if result, err := r.handleFinalizer(ctx, instance); result != nil {
+		return *result, err
 	}
 
 	if instance.Spec.ClientId != instance.Status.ClientId {
@@ -213,7 +127,7 @@ func (r *CommonClientRedirectUriReconciler) Reconcile(ctx context.Context, req c
 	// If secretName is set, create the oauth2-proxy secret
 	if instance.Spec.SecretName != "" {
 		// Get Keycloak client
-		kcClient, err := r.Keycloak.getClientFromId(ctx, instance.Spec.ClientId)
+		kcClient, err := r.Keycloak.GetClient(ctx, instance.Spec.ClientId)
 		if err != nil {
 			return ctrl.Result{}, err
 		}
@@ -275,6 +189,21 @@ func (r *CommonClientRedirectUriReconciler) SetupWithManager(mgr ctrl.Manager) e
 		return err
 	}
 
+	// Add index for secret owner reference
+	if err := mgr.GetFieldIndexer().IndexField(context.Background(), &corev1.Secret{}, ".metadata.controller", func(rawObj client.Object) []string {
+		secret := rawObj.(*corev1.Secret)
+		owner := metav1.GetControllerOf(secret)
+		if owner == nil {
+			return nil
+		}
+		if owner.APIVersion != daplav1alpha1.GroupVersion.String() || owner.Kind != "CommonClientRedirectUri" {
+			return nil
+		}
+		return []string{owner.Name}
+	}); err != nil {
+		return err
+	}
+
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&daplav1alpha1.CommonClientRedirectUri{}).
 		Owns(&corev1.Secret{}).
@@ -307,22 +236,49 @@ func (r *CommonClientRedirectUriReconciler) getAllClientRedirectUrisFromSpecs(ct
 }
 
 func (r *CommonClientRedirectUriReconciler) updateKeycloakClientRedirectUris(ctx context.Context, clientId string, redirectUris []string) error {
-	// Ensure we are authenticated with Keycloak
-	if err := r.Keycloak.ensureToken(ctx); err != nil {
-		return err
-	}
-
 	// Get the client
-	client, err := r.Keycloak.getClientFromId(ctx, clientId)
+	client, err := r.Keycloak.GetClient(ctx, clientId)
 	if err != nil {
 		return err
 	}
 
 	// Update the client
 	client.RedirectURIs = &redirectUris
-	if err := r.Keycloak.UpdateClient(ctx, r.Keycloak.Token.AccessToken, r.Keycloak.Realm, *client); err != nil {
+	if err := r.Keycloak.UpdateClient(ctx, *client); err != nil {
 		return err
 	}
 
 	return nil
+}
+
+func (r *CommonClientRedirectUriReconciler) handleFinalizer(ctx context.Context, instance *daplav1alpha1.CommonClientRedirectUri) (*ctrl.Result, error) {
+	if instance.GetDeletionTimestamp().IsZero() {
+		// If resource does not have finalizer, add it
+		if !controllerutil.ContainsFinalizer(instance, finalizerName) {
+			controllerutil.AddFinalizer(instance, finalizerName)
+			if err := r.Update(ctx, instance); err != nil {
+				return &ctrl.Result{}, err
+			}
+		}
+	} else {
+		// Update Keycloak client with new redirectUris, remove this resources' redirectUri
+		if controllerutil.ContainsFinalizer(instance, finalizerName) {
+			// Get clientId from status as it is no longer in spec
+			redirectUris, err := r.getAllClientRedirectUrisFromSpecs(ctx, instance.Status.ClientId)
+			if err != nil {
+				return &ctrl.Result{}, err
+			}
+			if err := r.updateKeycloakClientRedirectUris(ctx, instance.Status.ClientId, redirectUris); err != nil {
+				return &ctrl.Result{}, err
+			}
+			controllerutil.RemoveFinalizer(instance, finalizerName)
+			if err := r.Update(ctx, instance); err != nil {
+				return &ctrl.Result{}, err
+			}
+		}
+
+		return &ctrl.Result{}, nil
+	}
+
+	return nil, nil
 }
