@@ -2,6 +2,27 @@
 
 ## Description
 
+CRD and controller for managing Keycloak client redirect URIs.
+Used to allow services in Kubernetes to add redirect URIs to Keycloak clients.
+Example use case: An exposed service with unknown URI before launch with oauth2-proxy/reverse proxy which authenticates with Keycloak. 
+E.g. the service is launched by [onyxia](https://onyxia.sh/).
+
+
+Manifest example:
+```yaml
+apiVersion: dapla.ssb.no/v1alpha1
+kind: CommonClientRedirectUri
+metadata:
+  name: my-service
+  labels:
+    app: my-service
+spec:
+  clientId: <keycloak-client-id>{{ .Values.security.oauth2.clientId | quote }}
+  redirectUri: <the uri of the service which should be added to the redirect URI of the keycloak client. e.g. https://<serivce-url>/oauth2/callback if using oauth2-proxy>
+  secretName: <name of the kubernetes secret which will be created, containing the client secret for the keycloak client. May be used be the service, e.g. oauth2proxy>
+```
+
+
 ## Configuration
 
 The operator needs to be configured with the following environment variables:
