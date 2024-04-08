@@ -5,7 +5,6 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"fmt"
-
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -15,6 +14,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/log"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 
@@ -39,12 +39,14 @@ var (
 //+kubebuilder:rbac:groups=core,resources=secrets,verbs=get;list;watch;create;update;patch;delete
 
 func (r *CommonClientRedirectUriReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
-	_ = log.FromContext(ctx)
+	log := log.FromContext(ctx)
 
 	// Get the CommonClientRedirectUri resource with this namespace/name
 	instance := &daplav1alpha1.CommonClientRedirectUri{}
+	log.Info("Reconciling CommonClientRedirectUri", "instance", instance)
 	if err := r.Get(ctx, req.NamespacedName, instance); err != nil {
 		// Error reading the object - requeue the request.
+		log.Info("Failed to get CommonClientRedirectUri", "error", err)
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
@@ -54,6 +56,7 @@ func (r *CommonClientRedirectUriReconciler) Reconcile(ctx context.Context, req c
 	}
 
 	if instance.Spec.ClientId != instance.Status.ClientId {
+		log.Info("Updating CommonClientRedirectUri, since clinentId changed", "newClientId", instance.Spec.ClientId, "oldClientId", instance.Status.ClientId)
 		// Update Keycloak client with new redirectUris, remove this resources' redirectUri
 		redirectUris, err := r.getAllClientRedirectUrisFromSpecs(ctx, instance.Status.ClientId, nil)
 		if err != nil {
@@ -65,6 +68,7 @@ func (r *CommonClientRedirectUriReconciler) Reconcile(ctx context.Context, req c
 	}
 
 	// Update Keycloak client with new redirectUris, add this resources' redirectUri
+	log.Info("Update Keycloak client with new redirectUris, add this resources' redirectUri")
 	redirectUris, err := r.getAllClientRedirectUrisFromSpecs(ctx, instance.Spec.ClientId, nil)
 	if err != nil {
 		return ctrl.Result{}, err
@@ -208,6 +212,8 @@ func isSameInstance(a, b *daplav1alpha1.CommonClientRedirectUri) bool {
 }
 
 func (r *CommonClientRedirectUriReconciler) getAllClientRedirectUrisFromSpecs(ctx context.Context, clientId string, exludedInstance *daplav1alpha1.CommonClientRedirectUri) ([]string, error) {
+	logger := log.FromContext(ctx)
+	start := time.Now()
 	instances := &daplav1alpha1.CommonClientRedirectUriList{}
 	if err := r.List(ctx, instances, client.MatchingFields{"spec.clientId": clientId}); err != nil {
 		return nil, err
@@ -224,27 +230,40 @@ func (r *CommonClientRedirectUriReconciler) getAllClientRedirectUrisFromSpecs(ct
 		}
 	}
 
+	duration := time.Since(start)
+	logger.Info("Get all client redirect uris from specs executed", "duration", duration)
 	return redirectUris, nil
 }
 
 func (r *CommonClientRedirectUriReconciler) updateKeycloakClientRedirectUris(ctx context.Context, clientId string, redirectUris []string) error {
+	logger := log.FromContext(ctx)
+	start := time.Now()
 	// Get the client
 	client, err := r.Keycloak.GetClient(ctx, clientId)
 	if err != nil {
 		return err
 	}
 
+	duration := time.Since(start)
+	logger.Info("Get keycloak client", "duration", duration)
+
+	update := time.Now()
 	// Update the client
 	client.RedirectURIs = &redirectUris
 	if err := r.Keycloak.UpdateClient(ctx, *client); err != nil {
 		return err
 	}
 
+	updateDuration := time.Since(update)
+	logger.Info("Update keycloak client", "duration", updateDuration)
 	return nil
 }
 
 func (r *CommonClientRedirectUriReconciler) handleFinalizer(ctx context.Context, instance *daplav1alpha1.CommonClientRedirectUri) (*ctrl.Result, error) {
+	logger := log.FromContext(ctx)
+	logger.Info("Handling finalizer")
 	if instance.GetDeletionTimestamp().IsZero() {
+		logger.Info("DeletionTimestamp is zero, adding finalizer")
 		// If resource does not have finalizer, add it
 		if !controllerutil.ContainsFinalizer(instance, finalizerName) {
 			controllerutil.AddFinalizer(instance, finalizerName)
@@ -253,6 +272,7 @@ func (r *CommonClientRedirectUriReconciler) handleFinalizer(ctx context.Context,
 			}
 		}
 	} else {
+		logger.Info("DeletionTimestamp is not zero, removing finalizer if any")
 		// Update Keycloak client with new redirectUris, remove this resources' redirectUri
 		if controllerutil.ContainsFinalizer(instance, finalizerName) {
 			// Get list of all CRs for this client, except this one
@@ -269,6 +289,7 @@ func (r *CommonClientRedirectUriReconciler) handleFinalizer(ctx context.Context,
 			}
 		}
 
+		logger.Info("Finalizer done")
 		return &ctrl.Result{}, nil
 	}
 
