@@ -1,5 +1,7 @@
 # keycloak-redirecterator
 
+## ARCHIVED: This repo is replaced by [keycloakerator](https://github.com/statisticsnorway/keycloakerator/)
+
 ## Description
 
 CRD and controller for managing Keycloak client redirect URIs.
